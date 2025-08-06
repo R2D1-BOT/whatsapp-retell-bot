@@ -1,7 +1,6 @@
 const express = require('express');
 const axios = require('axios');
 require('dotenv').config();
-
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 const PORT = process.env.PORT || 10000;
@@ -9,54 +8,16 @@ const PORT = process.env.PORT || 10000;
 // Webhook: Recibe mensajes de Evolution API
 app.post('/webhook', async (req, res) => {
   try {
-    console.log('📨 Webhook recibido:', JSON.stringify(req.body, null, 2));
+    console.log('📨 Webhook recibido - Headers:', req.headers);
+    console.log('📨 Webhook recibido - Body:', req.body);
+    console.log('📨 Webhook recibido - Raw body type:', typeof req.body);
+    console.log('📨 Webhook recibido - Body stringified:', JSON.stringify(req.body, null, 2));
     
-    const { event, instance, data } = req.body;
+    // Responder OK sin importar qué llegue
+    res.status(200).json({ success: true, message: 'Webhook recibido correctamente' });
     
-    // Procesar mensajes entrantes
-    if (event === 'MESSAGES_UPSERT' && data?.messages) {
-      for (const msg of data.messages) {
-        // Solo procesar mensajes de texto que no sean propios
-        if (msg.messageType === 'textMessage' && !msg.key.fromMe) {
-          const phone = msg.key.remoteJid.replace('@s.whatsapp.net', '');
-          const message = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
-          
-          if (message) {
-            console.log(`📩 WhatsApp: ${phone} → "${message}"`);
-            
-            // Enviar a Retell AI
-            try {
-              await axios.post(
-                'https://api.retellai.com/v1/start-call',
-                {
-                  agent_id: process.env.RETELL_AGENT_ID,
-                  custom_user_id: phone,
-                  meta: { message, whatsapp: true }
-                },
-                {
-                  headers: {
-                    Authorization: `Bearer ${process.env.RETELL_API_KEY}`,
-                    'Content-Type': 'application/json'
-                  }
-                }
-              );
-              console.log(`✅ Mensaje enviado a Retell AI para ${phone}`);
-            } catch (retellError) {
-              console.error('❌ Error enviando a Retell:', retellError.response?.data || retellError.message);
-            }
-          }
-        }
-      }
-    }
-    
-    // Log otros eventos importantes
-    if (event === 'CONNECTION_UPDATE') {
-      console.log(`🔌 Estado conexión: ${data.state}`);
-    }
-    
-    res.status(200).json({ success: true });
   } catch (error) {
-    console.error('❌ Error procesando webhook:', error.message);
+    console.error('❌ Error procesando webhook:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -113,5 +74,5 @@ app.get('/status', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
-  console.log(`📱 Webhook URL: https://tu-app.onrender.com/webhook`);
+  console.log(`📱 Webhook URL: https://whatsapp-retell-bot.onrender.com/webhook`);
 });
