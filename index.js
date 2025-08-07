@@ -1,33 +1,28 @@
+require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
-require('dotenv').config();
 
 const app = express();
-app.use(express.json({ limit: '10mb' }));
-const PORT = process.env.PORT || 10000;
+const port = process.env.PORT || 3000;
 
-// Webhook: Recibe mensajes de Evolution API
+app.use(express.json());
+
+// Webhook de Evolution API
 app.post('/webhook', async (req, res) => {
   try {
-    console.log('📨 Webhook recibido - Headers:', req.headers);
-    console.log('📨 Webhook recibido - Body:', req.body);
-    console.log('📨 Webhook recibido - Raw body type:', typeof req.body);
-    console.log('📨 Webhook recibido - Body stringified:', JSON.stringify(req.body, null, 2));
-
-    // 🔍 Extraer datos del mensaje recibido
     const message = req.body?.data?.message?.conversation;
     const senderNumber = req.body?.data?.key?.remoteJid?.replace('@s.whatsapp.net', '');
-    const senderName = req.body?.data?.pushName || '👤';
+    const senderName = req.body?.data?.pushName || 'Usuario';
 
     if (message && senderNumber) {
-      console.log(`💬 Mensaje recibido de ${senderName} (${senderNumber}): "${message}"`);
+      console.log(`Mensaje recibido de ${senderName} (${senderNumber}): "${message}"`);
 
-      // 📨 Enviar respuesta de vuelta vía Evolution API
+      // Enviar respuesta automática
       await axios.post(
         `https://api.evoapicloud.com/message/sendText/${process.env.EVOLUTION_INSTANCE_ID}`,
         {
           number: senderNumber,
-          text: `👋 Hola ${senderName}, has dicho: "${message}". ¿Cómo puedo ayudarte?`
+          text: `Hola ${senderName}, has dicho: "${message}". ¿Cómo puedo ayudarte?`
         },
         {
           headers: {
@@ -37,7 +32,25 @@ app.post('/webhook', async (req, res) => {
         }
       );
 
-      console.log(`✅ Respuesta enviada a ${senderNumber}`);
+      console.log(`Respuesta enviada a ${senderNumber}`);
     } else {
-      console.warn('⚠️ No se pudo ext
+      console.warn('No se pudo extraer mensaje o número del webhook.');
+    }
+
+    res.status(200).send('ok');
+  } catch (error) {
+    console.error('Error procesando el webhook:', error.message);
+    res.status(500).send('error');
+  }
+});
+
+// Prueba simple
+app.get('/', (req, res) => {
+  res.send('Servidor de WhatsApp activo');
+});
+
+app.listen(port, () => {
+  console.log(`Servidor iniciado en puerto ${port}`);
+});
+
 
