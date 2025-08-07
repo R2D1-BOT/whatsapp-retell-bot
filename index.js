@@ -15,10 +15,10 @@ app.post('/webhook', async (req, res) => {
     const senderName = req.body?.data?.pushName || 'Usuario';
 
     if (message && senderNumber) {
-      console.log(`Mensaje recibido de ${senderName} (${senderNumber}): "${message}"`);
+      console.log(`📩 Mensaje recibido de ${senderName} (${senderNumber}): "${message}"`);
 
-      // Enviar respuesta automática
-      await axios.post(
+      // Respuesta automática (puedes conectarlo con Retell o tu lógica aquí)
+      const evoResponse = await axios.post(
         `https://api.evoapicloud.com/message/sendText/${process.env.EVOLUTION_INSTANCE_ID}`,
         {
           number: senderNumber,
@@ -26,31 +26,30 @@ app.post('/webhook', async (req, res) => {
         },
         {
           headers: {
-            Authorization: `Bearer ${process.env.EVOLUTION_TOKEN}`,
+            'apikey': process.env.EVOLUTION_TOKEN,
             'Content-Type': 'application/json'
           }
         }
       );
 
-      console.log(`Respuesta enviada a ${senderNumber}`);
+      console.log(`✅ Respuesta enviada a ${senderNumber}: status ${evoResponse.status}`);
     } else {
-      console.warn('No se pudo extraer mensaje o número del webhook.');
+      console.warn('⚠️ No se pudo extraer mensaje o número del webhook.');
     }
 
     res.status(200).send('ok');
   } catch (error) {
-    console.error('Error procesando el webhook:', error.message);
+    console.error('❌ Error procesando el webhook:', error?.response?.data || error.message);
     res.status(500).send('error');
   }
 });
 
-// Prueba simple
 app.get('/', (req, res) => {
-  res.send('Servidor de WhatsApp activo');
+  res.send('Webhook activo ✔️');
 });
 
 app.listen(port, () => {
-  console.log(`Servidor iniciado en puerto ${port}`);
+  console.log(`🚀 Servidor escuchando en el puerto ${port}`);
 });
 
 
