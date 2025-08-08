@@ -1,79 +1,56 @@
 import express from "express";
-import bodyParser from "body-parser";
-import axios from "axios";
-import dotenv from "dotenv";
+import fetch from "node-fetch";
 
-dotenv.config();
 const app = express();
-app.use(bodyParser.json());
+app.use(express.json());
 
-// Variables de entorno necesarias
-const PORT = process.env.PORT || 3000;
+const EVOLUTION_API_URL = process.env.EVOLUTION_API_URL;
 const EVOLUTION_API_KEY = process.env.EVOLUTION_API_KEY;
 const RETELL_API_KEY = process.env.RETELL_API_KEY;
-const RETELL_AGENT_ID = process.env.RETELL_AGENT_ID;
+const RETELL_CHAT_ID = process.env.RETELL_CHAT_ID;
 
-// Webhook que recibe mensajes de Evolution API
 app.post("/webhook", async (req, res) => {
   try {
-    const data = req.body;
-    console.log("📩 Mensaje entrante de Evolution API:", JSON.stringify(data));
+    const messageFromUser = req.body.message?.text;
+    const from = req.body.message?.from;
 
-    const message = data?.message?.text?.body || "";
-    const from = data?.message?.from || "";
+    if (!messageFromUser) return res.sendStatus(200);
 
-    if (!message || !from) {
-      return res.sendStatus(200);
-    }
-
-    // 1️⃣ Enviar mensaje a Retell AI
-    const retellResponse = await axios.post(
-      `https://api.retellai.com/v1/chat/completion`,
-      {
-        agent_id: RETELL_AGENT_ID,
-        messages: [{ role: "user", content: message }]
+    // 1. Enviar mensaje a Retell
+    const retellResponse = await fetch("https://api.retellai.com/create-chat-completion", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${RETELL_API_KEY}`,
+        "Content-Type": "application/json"
       },
-      {
-        headers: {
-          Authorization: `Bearer ${RETELL_API_KEY}`,
-          "Content-Type": "application/json"
-        }
-      }
-    );
+      body: JSON.stringify({
+        chat_id: RETELL_CHAT_ID,
+        content: messageFromUser
+      })
+    });
 
-    const reply =
-      retellResponse.data?.choices?.[0]?.message?.content ||
-      "No tengo respuesta en este momento.";
+    const retellData = await retellResponse.json();
+    const replyFromAgent = retellData?.messages?.[0]?.content || "No response from agent.";
 
-    console.log("🤖 Respuesta de Retell:", reply);
-
-    // 2️⃣ Enviar respuesta de vuelta a Evolution API (WhatsApp)
-    await axios.post(
-      "https://api.evolution-api.com/v1/messages",
-      {
-        to: from,
-        type: "text",
-        text: { body: reply }
+    // 2. Enviar respuesta a Evolution para WhatsApp
+    await fetch(`${EVOLUTION_API_URL}/message/sendText`, {
+      method: "POST",
+      headers: {
+        "apikey": EVOLUTION_API_KEY,
+        "Content-Type": "application/json"
       },
-      {
-        headers: {
-          Authorization: `Bearer ${EVOLUTION_API_KEY}`,
-          "Content-Type": "application/json"
-        }
-      }
-    );
+      body: JSON.stringify({
+        chatId: from,
+        text: replyFromAgent
+      })
+    });
 
     res.sendStatus(200);
-  } catch (error) {
-    console.error("❌ Error en webhook:", error.response?.data || error.message);
+  } catch (err) {
+    console.error("Error:", err);
     res.sendStatus(500);
   }
 });
 
-app.get("/", (req, res) => {
-  res.send("✅ Bot WhatsApp-Retell activo");
-});
+app.listen(8080, () => console.log("🚀 Servidor corriendo en puerto 8080"));
 
-app.listen(PORT, () => {
-  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
-});
