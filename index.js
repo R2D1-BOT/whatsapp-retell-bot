@@ -1,56 +1,75 @@
-import express from "express";
-import fetch from "node-fetch";
-
+require('dotenv').config();
+const express = require('express');
+const axios = require('axios');
 const app = express();
-app.use(express.json());
 
+app.use(express.json({ limit: '10mb' }));
+
+const PORT = process.env.PORT || 8080;
+
+const RETELL_API_KEY = process.env.RETELL_API_KEY;
+const RETELL_AGENT_ID = process.env.RETELL_AGENT_ID;
 const EVOLUTION_API_URL = process.env.EVOLUTION_API_URL;
 const EVOLUTION_API_KEY = process.env.EVOLUTION_API_KEY;
-const RETELL_API_KEY = process.env.RETELL_API_KEY;
-const RETELL_CHAT_ID = process.env.RETELL_CHAT_ID;
+const EVOLUTION_INSTANCE_ID = process.env.EVOLUTION_INSTANCE_ID;
 
-app.post("/webhook", async (req, res) => {
+const chatSessions = new Map();
+
+async function createRetellChat(agentId) {
+  const response = await axios.post(
+    'https://api.retell.ai/create-chat',
+    { agent_id: agentId },
+    { headers: { Authorization: `Bearer ${RETELL_API_KEY}` } }
+  );
+  return response.data.chat_id;
+}
+
+app.post('/webhook', async (req, res) => {
   try {
-    const messageFromUser = req.body.message?.text;
-    const from = req.body.message?.from;
+    const body = req.body;
+    const message = body?.data?.message?.conversation;
+    const senderJid = body?.data?.key?.remoteJid;
+    const senderNumber = senderJid?.replace('@s.whatsapp.net', '');
 
-    if (!messageFromUser) return res.sendStatus(200);
+    if (!message || !senderNumber)
+      return res.status(400).json({ success: false, error: 'Faltan datos' });
 
-    // 1. Enviar mensaje a Retell
-    const retellResponse = await fetch("https://api.retellai.com/create-chat-completion", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${RETELL_API_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        chat_id: RETELL_CHAT_ID,
-        content: messageFromUser
-      })
-    });
+    let chatId = chatSessions.get(senderNumber);
+    if (!chatId) {
+      chatId = await createRetellChat(RETELL_AGENT_ID);
+      chatSessions.set(senderNumber, chatId);
+    }
 
-    const retellData = await retellResponse.json();
-    const replyFromAgent = retellData?.messages?.[0]?.content || "No response from agent.";
+    const retellResp = await axios.post(
+      'https://api.retell.ai/create-chat-completion',
+      { chat_id: chatId, content: message },
+      { headers: { Authorization: `Bearer ${RETELL_API_KEY}` } }
+    );
 
-    // 2. Enviar respuesta a Evolution para WhatsApp
-    await fetch(`${EVOLUTION_API_URL}/message/sendText`, {
-      method: "POST",
-      headers: {
-        "apikey": EVOLUTION_API_KEY,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        chatId: from,
-        text: replyFromAgent
-      })
-    });
+    const agentMsg = retellResp.data.messages.find(m => m.role === 'agent');
+    if (!agentMsg)
+      throw new Error('No hay respuesta del agente');
 
-    res.sendStatus(200);
-  } catch (err) {
-    console.error("Error:", err);
-    res.sendStatus(500);
+    await axios.post(
+      `${EVOLUTION_API_URL}/message/sendText/${EVOLUTION_INSTANCE_ID}`,
+      { number: senderNumber, text: agentMsg.content },
+      {
+        headers: {
+          Authorization: `Bearer ${EVOLUTION_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    res.status(200).json({ success: true });
+  } catch (error) {
+    console.error('Error webhook:', error.message);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
-app.listen(8080, () => console.log("🚀 Servidor corriendo en puerto 8080"));
+app.listen(PORT, () => {
+  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
+});
+
 
