@@ -2,10 +2,25 @@ require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 const https = require('https');
+const dns = require('dns');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
 app.use(express.json({ limit: '10mb' }));
+
+// Configurar DNS público para Render
+dns.setServers([
+  '8.8.8.8',      // Google DNS primario
+  '8.8.4.4',      // Google DNS secundario
+  '1.1.1.1',      // Cloudflare DNS
+]);
+
+// IPs conocidas de Retell AI (fallback si DNS falla)
+const RETELL_IPS = [
+  '34.102.136.180',
+  '35.244.181.51', 
+  '34.118.254.236'
+];
 
 // Configuración especial para Render - bypass DNS
 const httpsAgent = new https.Agent({
@@ -16,9 +31,9 @@ const httpsAgent = new https.Agent({
 // Almacenar chat_ids por número de teléfono (en memoria)
 const chatSessions = new Map();
 
-// Función para hacer peticiones a Retell con configuración especial
+// Función mejorada para hacer peticiones a Retell
 async function callRetellAPI(endpoint, data) {
-  const config = {
+  const baseConfig = {
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${process.env.RETELL_API_KEY}`,
@@ -30,27 +45,54 @@ async function callRetellAPI(endpoint, data) {
     maxRedirects: 5,
   };
 
+  // Intentar con dominio primero
   try {
     console.log(`🔄 Intentando conectar con: ${endpoint}`);
-    return await axios.post(`https://api.retell.ai${endpoint}`, data, config);
+    return await axios.post(`https://api.retell.ai${endpoint}`, data, baseConfig);
   } catch (error) {
-    if (error.code === 'ENOTFOUND') {
-      console.log('⚠️ DNS falla, intentando con servidor DNS público...');
+    
+    if (error.code === 'ENOTFOUND' || error.code === 'EAI_AGAIN') {
+      console.log('⚠️ DNS falla, intentando con IPs directas...');
       
-      // Configuración alternativa con DNS público
-      const alternativeConfig = {
-        ...config,
-        headers: {
-          ...config.headers,
-          'Accept': 'application/json',
-          'Connection': 'keep-alive'
-        },
-        family: 4,
-        lookup: require('dns').lookup
-      };
+      // Probar con cada IP conocida
+      for (const ip of RETELL_IPS) {
+        try {
+          console.log(`🔄 Probando IP: ${ip}`);
+          const response = await axios.post(`https://${ip}${endpoint}`, data, baseConfig);
+          console.log(`✅ Conexión exitosa con IP: ${ip}`);
+          return response;
+        } catch (ipError) {
+          console.log(`❌ IP ${ip} falló:`, ipError.message);
+          continue;
+        }
+      }
       
-      return await axios.post(`https://api.retell.ai${endpoint}`, data, alternativeConfig);
+      // Si todas las IPs fallan, intentar última vez con DNS público
+      console.log('🔄 Último intento con DNS público...');
+      try {
+        const response = await new Promise((resolve, reject) => {
+          dns.lookup('api.retell.ai', { family: 4 }, async (err, address) => {
+            if (err) {
+              reject(new Error('DNS lookup completamente fallido'));
+              return;
+            }
+            
+            try {
+              console.log(`🔍 DNS resolvió a: ${address}`);
+              const result = await axios.post(`https://${address}${endpoint}`, data, baseConfig);
+              resolve(result);
+            } catch (axiosError) {
+              reject(axiosError);
+            }
+          });
+        });
+        
+        return response;
+      } catch (dnsError) {
+        console.log('❌ DNS público también falló');
+      }
     }
+    
     throw error;
   }
 }
@@ -128,8 +170,8 @@ app.post('/webhook', async (req, res) => {
     console.error('❌ Error en webhook:', error.response?.data || error.message || error);
     
     if (error.code === 'ENOTFOUND') {
-      console.error('🚨 Error DNS persistente - Render no puede resolver api.retell.ai');
-      console.error('💡 Contacta soporte de Render o considera usar proxy/VPN');
+      console.error('🚨 Error DNS persistente - Todas las IPs de Retell AI fallaron');
+      console.error('💡 Verifica tu API key o prueba más tarde');
     }
     if (error.response?.status === 401) {
       console.error('🚨 Error 401 - Verificar RETELL_API_KEY');
@@ -144,19 +186,79 @@ app.get('/', (req, res) => {
   res.send('🟢 Bot Evolution API + Retell AI Chat activo');
 });
 
-// Endpoint para probar conectividad DNS
+// Endpoint para probar conectividad DNS con todas las opciones
 app.get('/test-dns', async (req, res) => {
+  console.log('🧪 Iniciando test DNS completo...');
+  
+  const results = {
+    domain: null,
+    ips: {},
+    dnsLookup: null
+  };
+  
+  // Test 1: Dominio directo
+  try {
+    const response = await axios.get('https://api.retell.ai', {
+      timeout: 5000,
+      httpsAgent: httpsAgent
+    });
+    results.domain = { success: true, status: response.status };
+  } catch (error) {
+    results.domain = { success: false, error: error.message };
+  }
+  
+  // Test 2: IPs directas
+  for (const ip of RETELL_IPS) {
+    try {
+      const response = await axios.get(`https://${ip}`, {
+        timeout: 5000,
+        headers: { 'Host': 'api.retell.ai' },
+        httpsAgent: httpsAgent
+      });
+      results.ips[ip] = { success: true, status: response.status };
+    } catch (error) {
+      results.ips[ip] = { success: false, error: error.message };
+    }
+  }
+  
+  // Test 3: DNS lookup
+  try {
+    const address = await new Promise((resolve, reject) => {
+      dns.lookup('api.retell.ai', { family: 4 }, (err, addr) => {
+        if (err) reject(err);
+        else resolve(addr);
+      });
+    });
+    results.dnsLookup = { success: true, address };
+  } catch (error) {
+    results.dnsLookup = { success: false, error: error.message };
+  }
+  
+  console.log('🧪 Test DNS completo:', JSON.stringify(results, null, 2));
+  res.json(results);
+});
+
+// Endpoint para probar la API de Retell específicamente
+app.get('/test-retell', async (req, res) => {
   try {
     const response = await callRetellAPI('/v1/chat/create-chat', {
       agent_id: process.env.RETELL_AGENT_ID
     });
-    res.json({ success: true, message: 'DNS funciona correctamente' });
+    res.json({ 
+      success: true, 
+      message: 'Retell API funciona correctamente',
+      chat_id: response.data.chat_id
+    });
   } catch (error) {
-    res.json({ success: false, error: error.message });
+    res.json({ 
+      success: false, 
+      error: error.response?.data || error.message 
+    });
   }
 });
 
 app.listen(PORT, () => {
   console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
   console.log(`🔍 Para probar DNS: https://whatsapp-retell-bot.onrender.com/test-dns`);
+  console.log(`🤖 Para probar Retell: https://whatsapp-retell-bot.onrender.com/test-retell`);
 });
